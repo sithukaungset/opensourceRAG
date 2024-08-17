@@ -2,12 +2,11 @@ from flask import Flask, request, jsonify
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.llama_cpp import LlamaCPP
 from llama_index.vector_stores.postgres import PGVectorStore
-from llama_index.core.node_parser import SentenceSplitter
-from llama_index.core.schema import TextNode
-from llama_index.core.vector_stores import VectorStoreQuery
-from llama_index.core import QueryBundle
-from llama_index.core.retrievers import BaseRetriever
-from llama_index.core.query_engine import RetrieverQueryEngine
+from langchain.chains import LLMChain
+from langchain.prompts import PromptTemplate
+from langchain.vectorstores import LlamaPostgresVectorStore
+from langchain.llms import LlamaLLM
+from langchain.memory import ConversationBufferMemory
 import time
 import psycopg2
 from pathlib import Path
@@ -15,7 +14,7 @@ from pathlib import Path
 # Initialize Flask app
 app = Flask(__name__)
 
-# Set up model and vector store
+# Set up model and vector store using LangChain components
 embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en")
 
 model_url = "https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_0.gguf"
@@ -40,63 +39,69 @@ conn = psycopg2.connect(
 )
 conn.autocommit = True
 
-# Initialize vector store
-vector_store = PGVectorStore.from_params(
+# Initialize vector store with LangChain wrapper
+vector_store = LlamaPostgresVectorStore.from_params(
     database="vector_db",
     host="localhost",
     password="password",
     port="5432",
     user="jerry",
     table_name="llama2_paper",
-    embed_dim=384,  # OpenAI embedding dimension
+    embed_dim=384,
 )
 
-# Define retriever class
-class VectorDBRetriever(BaseRetriever):
-    def __init__(self, vector_store, embed_model, query_mode="default", similarity_top_k=2):
-        self._vector_store = vector_store
-        self._embed_model = embed_model
-        self._query_mode = query_mode
-        self._similarity_top_k = similarity_top_k
-        super().__init__()
+# Define LangChain components
+prompt_template = PromptTemplate(template="Given the following query: {query}, provide a detailed response.")
+memory = ConversationBufferMemory()
 
-    def _retrieve(self, query_bundle: QueryBundle):
-        query_embedding = self._embed_model.get_query_embedding(query_bundle.query_str)
-        vector_store_query = VectorStoreQuery(
-            query_embedding=query_embedding,
-            similarity_top_k=self._similarity_top_k,
-            mode=self._query_mode,
-        )
-        query_result = self._vector_store.query(vector_store_query)
-        nodes_with_scores = [
-            NodeWithScore(node=node, score=(query_result.similarities[index] if query_result.similarities else None))
-            for index, node in enumerate(query_result.nodes)
-        ]
-        return nodes_with_scores
-
-retriever = VectorDBRetriever(vector_store, embed_model, query_mode="default", similarity_top_k=2)
-query_engine = RetrieverQueryEngine.from_args(retriever, llm=llm)
+llm_chain = LLMChain(
+    llm=LlamaLLM(llm),
+    prompt=prompt_template,
+    memory=memory
+)
 
 # Define routes
 @app.route('/query', methods=['POST'])
 def query():
     data = request.json
     query_str = data.get('query')
+    
+    # Start latency timer
     start_time = time.time()
-    response = query_engine.query(query_str)
+    
+    # Create vector store query
+    query_embedding = embed_model.get_query_embedding(query_str)
+    vector_store_query = VectorStoreQuery(
+        query_embedding=query_embedding,
+        similarity_top_k=2,
+        mode="default"
+    )
+    
+    # Query the vector store and retrieve relevant nodes
+    query_result = vector_store.query(vector_store_query)
+    nodes_content = "\n".join([node.get_content() for node in query_result.nodes])
+    
+    # Generate a response using the LLM chain
+    response = llm_chain.run({"query": nodes_content})
+    
+    # Measure latency
     latency = time.time() - start_time
+    
+    # Prepare the result
     result = {
         "query": query_str,
-        "response": str(response),
+        "response": response,
         "latency": latency,
-        "source_content": response.source_nodes[0].get_content() if response.source_nodes else None
+        "source_content": nodes_content
     }
+    
     # Store result in the database
     with conn.cursor() as cursor:
         cursor.execute(
             "INSERT INTO responses (query, response, latency) VALUES (%s, %s, %s)",
-            (query_str, result["response"], latency)
+            (query_str, response, latency)
         )
+    
     return jsonify(result)
 
 @app.route('/load_data', methods=['POST'])

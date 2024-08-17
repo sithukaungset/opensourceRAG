@@ -1,0 +1,8 @@
+flask
+llama-cpp-python
+ctranslate2
+sentence-transformers
+faiss-cpu
+numpy
+pandas
+requests

@@ -1,13 +1,16 @@
 from flask import Flask, request, jsonify
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.llama_cpp import LlamaCPP
-from llama_index.vector_stores.postgres import PGVectorStore
+from llama_index.core.indices.vector_store.base import VectorStoreIndex
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.core.schema import TextNode
 from llama_index.core.vector_stores import VectorStoreQuery
 from llama_index.core import QueryBundle
 from llama_index.core.retrievers import BaseRetriever
 from llama_index.core.query_engine import RetrieverQueryEngine
+from llama_index.vector_stores.postgres import PGVectorStore 
+from llama_index.readers.file import PyMuPDFReader
+
 import time
 import psycopg2
 from pathlib import Path
@@ -18,10 +21,9 @@ app = Flask(__name__)
 # Set up model and vector store
 embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en")
 
-model_url = "https://huggingface.co/TheBloke/Llama-2-13B-chat-GGUF/resolve/main/llama-2-13b-chat.Q4_0.gguf"
 llm = LlamaCPP(
-    model_url=model_url,
-    model_path=None,
+    #model_url=model_url,
+    model_path= 'models\llama-2-7b-chat.Q2_K.gguf',
     temperature=0.1,
     max_new_tokens=256,
     context_window=3900,
@@ -32,9 +34,9 @@ llm = LlamaCPP(
 
 # Connect to Postgres database
 conn = psycopg2.connect(
-    dbname="vector_db",
-    user="jerry",
-    password="password",
+    dbname="postgres",
+    user="postgres",
+    password="geniusraver27",
     host="localhost",
     port="5432"
 )
@@ -42,11 +44,11 @@ conn.autocommit = True
 
 # Initialize vector store
 vector_store = PGVectorStore.from_params(
-    database="vector_db",
+    database="postgres",
     host="localhost",
-    password="password",
+    password="geniusraver27",
     port="5432",
-    user="jerry",
+    user="postgres",
     table_name="llama2_paper",
     embed_dim=384,  # OpenAI embedding dimension
 )
@@ -103,7 +105,8 @@ def query():
 def load_data():
     # Example endpoint to load and process data
     loader = PyMuPDFReader()
-    documents = loader.load(file_path=Path("data/llama2.pdf"))
+    file_path = Path("data/llama2.pdf")
+    documents = loader.load(file_path=file_path)
     
     text_parser = SentenceSplitter(chunk_size=1024)
     text_chunks = []

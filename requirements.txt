@@ -6,3 +6,9 @@ faiss-cpu
 numpy
 pandas
 requests
+psycopg2
+llama_index
+llama_index.embeddings.huggingface
+llama_index.llms.llama_cpp
+llama-index-vector-stores-postgres 
+fitz
